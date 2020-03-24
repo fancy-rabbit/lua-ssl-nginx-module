@@ -60,6 +60,7 @@ end
 
 local meta_shdict_set, meta_shdict_get
 local fetch_key_from_memc
+local key_encryption_key
 
 -- Store N+2 keys, including the current slot, the next slot and previous N
 -- slots' key.
@@ -74,6 +75,21 @@ local function ticket_key_index(now, offset)
     return memc_key_prefix .. t
 end
 
+
+-- decrypt the stored key
+local function decrypt(key, key_encryption_key)
+    local aes = require 'resty.aes'
+    -- dummy iv, not used in ecb
+    local ret
+    pcall(function()
+        local cipher = aes:new(key_encryption_key, nil, aes.cipher(256, 'ecb'), {method = function(key)return key end, iv = string.rep(string.char(0), 16)})
+        ret = cipher:decrypt(ngx.decode_base64(key))
+    end)
+    if ret then
+        ret = ngx.decode_base64(ret)
+    end
+    return ret
+end
 
 -- get ticket key from shared dict. Ticket key should be protected
 -- by some key encryption key. The ticket key would be decrypted
@@ -97,7 +113,7 @@ local function shdict_get_and_decrypt(ctx, idx)
     local key = res
     -- TODO: Decrypt res into 48-byte key
     -- Ideally we should protect the ticket key with some encryption.
-    -- key = decrypt(key, key_encryption_key)
+    key = decrypt(key, key_encryption_key)
 
     if #key ~= 48 and #key ~= 80 then
       return fail("malformed key: #key ", #key)
@@ -130,7 +146,7 @@ local function memc_get_and_decrypt(ctx, idx, offset)
     local key = res
     -- TODO: Decrypt res into 48-byte key
     -- Ideally we should protect the ticket key with some encryption.
-    -- key = decrypt(key, key_encryption_key)
+    key = decrypt(key, key_encryption_key)
 
     if #key ~= 48 and #key ~= 80 then
       return fail("malformed key: #key ", #key)
@@ -240,6 +256,7 @@ function _M.init(opts)
     ticket_ttl = opts.ticket_ttl
     time_slot = opts.key_rotation_period
     memc_key_prefix = opts.memc_key_prefix
+    key_encryption_key = opts.key_encryption_key
 
     local shdict_name = opts.cache_shdict_name
     local shm_cache_pos_ttl = opts.shm_cache_positive_ttl
